@@ -108,9 +108,11 @@ def pool_training(target, iterations):
       # Place outputs back in the pool.
       pool[idxs[j]] = train(batch[j], target)
 
-def run(seed, visual=False):
+def run(seed, visual=False, load=False):
+  if load:
+    net.load_state_dict(torch.load("local_rules_net.pt"))
   net.eval()
-  with torch.no_grad:
+  with torch.no_grad():
     for step in range(100):
       ds_grid = torch.zeros_like(seed)
       perception_grid = perceive(seed)
@@ -122,15 +124,20 @@ def run(seed, visual=False):
       seed = seed + ds_grid
       seed = alive_masking(seed)
       if visual:
-        img = np.array((seed[0,:,:], seed[1,:,:], seed[2,:,:]))
+        img = seed.numpy()
+        img = np.array((img[0,:,:], img[1,:,:], img[2,:,:]))
         cv2.imshow("cellgrid", img)
+        cv2.waitKey()
+  if not visual:
+    seed = seed.numpy()
+    print(np.array((seed[0,:,:], seed[1,:,:], seed[2,:,:])))
+    
 
   
 #%%
 # TRAINING
 pool_training('lizard', 1)
 
-torch.save(net.state_dict(), "local_rules_net")
-
-run(seed)
+torch.save(net.state_dict(), "local_rules_net.pt")
+run(seed, load=True, visual=True)
 # %%
