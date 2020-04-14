@@ -12,13 +12,10 @@ sobel_x = torch.tensor(16*[16*[[[-1, 0, +1],
 sobel_y = sobel_x.transpose(2,3)
 
 targets = dict()
-img = cv2.resize(cv2.imread("/home/augo/coding/ca/lizard.png", cv2.IMREAD_UNCHANGED), (64, 64))
+img = cv2.resize(cv2.imread("lizard.png", cv2.IMREAD_UNCHANGED), (64, 64))
 mask = img[:,:,3] == 0
 img[mask] = [255, 255, 255, 255]
 img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-cv2.imshow("lizard", img)
-cv2.waitKey()
-cv2.destroyAllWindows()
 img = np.array((img[:,:,0], img[:,:,1], img[:,:,2]))
 #print(img.shape)
 targets["lizard"] = img
@@ -45,7 +42,7 @@ def perceive(state_grid):
   # the gradients of channels in x and 
   # the gradient of channels in y.
   #print(compute_grid.shape, grad_x.shape, grad_y.shape)
-  perception_grid = torch.cat((state_grid, grad_x, grad_y), axis=0)
+  perception_grid = torch.cat((state_grid, grad_x, grad_y), dim=0)
   #print(perception_grid.shape)
   return perception_grid
 
@@ -56,15 +53,13 @@ def update(perception_vector, net):
   # convolutions for performance reasons.
   return net(perception_vector)
 
-def stochastic_update(state_grid, ds_grid):
-  # Zero out a random fraction of the updates.
-  rand_mask = torch.rand(64, 64) < 0.5
-  ds_grid = ds_grid * rand_mask
-  return state_grid + ds_grid
+def stochastic_update():
+  # Zero out a random fraction of the updates.  
+  return torch.tensor(torch.rand(64, 64) < 0.5)
 
 def alive_masking(state_grid):
   # Take the alpha channel as the measure of “life”.
-  alive = torch.max_pool2d(state_grid[None, 3, :, :], (3,3), padding=1, stride=1) > 0.1
+  alive = torch.tensor(torch.max_pool2d(state_grid[None, 3, :, :], (3,3), padding=1, stride=1) > 0.1, dtype=torch.float)
   state_grid = state_grid * alive
   return state_grid
 
@@ -75,28 +70,30 @@ criterion = torch.nn.MSELoss()
 
 def train(sample_grid, target):
   net.zero_grad()
-  ds_grid = torch.zeros_like(sample_grid)
-  for step in trange(16):
+  for step in range(64):
+    ds_grid = torch.zeros_like(sample_grid)
     perception_grid = perceive(sample_grid)
+    stochastic_mask = stochastic_update()
     for j in range(64):
       for k in range(64):
-        ds_grid[:,j,k] = net(perception_grid[:,j,k])
-    sample_grid = stochastic_update(sample_grid, ds_grid)
+        if stochastic_mask[j,k]==1 and sample_grid[3,j,k]!=0:
+          ds_grid[:,j,k] = net(perception_grid[:,j,k])
+    sample_grid = sample_grid + ds_grid
     sample_grid = alive_masking(sample_grid)
 
   loss = criterion(sample_grid[:3,:,:], target)
-  print("before gradient")
+  #print("before gradient")
   loss.backward()
-  print("after gradient")
+  #print("after gradient")
   optimizer.step()
   return sample_grid
     
+seed = torch.zeros(16, 64, 64, dtype=torch.float32)
+seed[3:, 64//2, 64//2] = 1.0
 
 def pool_training(target, iterations):
-  global targets
+  global targets, seed
   # Set alpha and hidden channels to (1.0).
-  seed = torch.zeros(16, 64, 64, dtype=torch.float32)
-  seed[3:, 64//2, 64//2] = 1.0
   target = torch.tensor(targets[target], dtype=torch.float32)
   pool = [seed] * 1024
   for i in range(iterations):
@@ -107,12 +104,33 @@ def pool_training(target, iterations):
     # Replace the highest-loss sample with the seed.
     batch[0] = seed
     # Perform training.
-    for j in range(32):
+    for j in trange(32):
       # Place outputs back in the pool.
       pool[idxs[j]] = train(batch[j], target)
+
+def run(seed, visual=False):
+  net.eval()
+  with torch.no_grad:
+    for step in range(100):
+      ds_grid = torch.zeros_like(seed)
+      perception_grid = perceive(seed)
+      stochastic_mask = stochastic_update()
+      for j in range(64):
+        for k in range(64):
+          if stochastic_mask[j,k]==1 and seed[3,j,k]!=0:
+            ds_grid[:,j,k] = net(perception_grid[:,j,k])
+      seed = seed + ds_grid
+      seed = alive_masking(seed)
+      if visual:
+        img = np.array((seed[0,:,:], seed[1,:,:], seed[2,:,:]))
+        cv2.imshow("cellgrid", img)
+
   
 #%%
 # TRAINING
-pool_training('lizard', 16)
+pool_training('lizard', 1)
 
+torch.save(net.state_dict(), "local_rules_net")
+
+run(seed)
 # %%
